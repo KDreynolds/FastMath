@@ -1,56 +1,16 @@
 #include "FastMath.h"
 #include <string.h>  // For memcpy, memset
+#include <cstdint>   // For uint64_t
+#include <cstdlib>   // For rand()
+#include <cmath>     // For std::sqrt - for comparison
+
+#if defined(__x86_64__)
+#include <immintrin.h>
+#elif defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
 
 namespace FastMath {
-
-    // Implementation classes that contain the assembly code
-    class MatrixImpl {
-    public:
-        static void multiply4x4(const float* a, const float* b, float* result) {
-            __asm__ __volatile__ (
-                // Load first row of matrix A into ymm0
-                "vmovups (%0), %%ymm0\n\t"
-                "vmovups 16(%0), %%ymm1\n\t"
-                
-                // Load first row of matrix B into ymm2
-                "vmovups (%1), %%ymm2\n\t"
-                "vmovups 16(%1), %%ymm3\n\t"
-                
-                // Multiply and accumulate
-                "vmulps %%ymm0, %%ymm2, %%ymm4\n\t"
-                "vaddps %%ymm4, %%ymm1, %%ymm5\n\t"
-                
-                // Store result
-                "vmovups %%ymm5, (%2)\n\t"
-                :
-                : "r"(a), "r"(b), "r"(result)
-                : "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5", "memory"
-            );
-        }
-
-        static void transformVector(const float* matrix, const float* vector, float* result) {
-            __asm__ __volatile__ (
-                // Load vector into xmm0
-                "vmovups (%1), %%xmm0\n\t"
-                
-                // Load matrix rows
-                "vmovups (%0), %%xmm1\n\t"
-                "vmovups 16(%0), %%xmm2\n\t"
-                "vmovups 32(%0), %%xmm3\n\t"
-                "vmovups 48(%0), %%xmm4\n\t"
-                
-                // Multiply and accumulate
-                "vmulps %%xmm0, %%xmm1, %%xmm5\n\t"
-                "vaddps %%xmm5, %%xmm2, %%xmm6\n\t"
-                
-                // Store result
-                "vmovups %%xmm6, (%2)\n\t"
-                :
-                : "r"(matrix), "r"(vector), "r"(result)
-                : "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "memory"
-            );
-        }
-    };
 
     class RandomImpl {
     public:
@@ -58,18 +18,24 @@ namespace FastMath {
             unsigned char* output = (unsigned char*)dest;
             for (size_t i = 0; i < size; i += 8) {
                 uint64_t random;
+                #if defined(__x86_64__)
                 __asm__ __volatile__ (
                     "rdrand %0"
                     : "=r"(random)
                     :
                     : "cc"
                 );
+                #else
+                // Fallback for non-x86_64 systems
+                random = rand(); // Note: not cryptographically secure
+                #endif
                 memcpy(&output[i], &random, 8);
             }
         }
 
         static uint64_t xoshiro256(uint64_t* state) {
             uint64_t result;
+            #if defined(__x86_64__)
             __asm__ __volatile__ (
                 // Load state
                 "movq (%1), %%rax\n\t"
@@ -89,70 +55,32 @@ namespace FastMath {
                 : "r"(state)
                 : "rax", "rbx", "rcx", "rdx", "memory"
             );
+            #else
+            // Fallback implementation for non-x86_64 systems
+            result = state[0];
+            uint64_t t = state[1] << 17;
+            state[2] ^= state[0];
+            state[3] ^= state[1];
+            state[1] ^= state[2];
+            state[0] ^= state[3];
+            state[2] ^= t;
+            state[3] = (state[3] << 45) | (state[3] >> 19);
+            #endif
             return result;
         }
     };
 
-    // Matrix4x4 implementation
-    MatrixImpl* Matrix4x4::s_impl = NULL;
     RandomImpl* Random::s_impl = NULL;
 
-    Matrix4x4::Matrix4x4() {
-        setIdentity();
-    }
-
-    Matrix4x4::Matrix4x4(const float* data) {
-        memcpy(m_data, data, sizeof(m_data));
-    }
-
-    Matrix4x4::~Matrix4x4() {
-    }
-
-    void Matrix4x4::setIdentity() {
-        static const float identity[] = {
-            1.0f, 0.0f, 0.0f, 0.0f,
-            0.0f, 1.0f, 0.0f, 0.0f,
-            0.0f, 0.0f, 1.0f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f
-        };
-        memcpy(m_data, identity, sizeof(m_data));
-    }
-
-    void Matrix4x4::setZero() {
-        memset(m_data, 0, sizeof(m_data));
-    }
-
-    void Matrix4x4::set(const float* data) {
-        memcpy(m_data, data, sizeof(m_data));
-    }
-
-    void Matrix4x4::multiply(const Matrix4x4& other, Matrix4x4& result) const {
-        if (s_impl) {
-            MatrixImpl::multiply4x4(m_data, other.m_data, result.m_data);
-        }
-    }
-
-    void Matrix4x4::transform(const float* vector, float* result) const {
-        if (s_impl) {
-            MatrixImpl::transformVector(m_data, vector, result);
-        }
-    }
-
-    bool Matrix4x4::initialize() {
-        if (!s_impl) {
-            s_impl = new MatrixImpl();
-        }
-        return true;
-    }
-
-    void Matrix4x4::shutdown() {
-        delete s_impl;
-        s_impl = NULL;
-    }
-
-    // Random implementation
     Random::Random(unsigned int seed) {
-        RandomImpl::generateRandomBytes(m_state, sizeof(m_state));
+        // Use the seed to initialize the state with explicit casts
+        uint64_t temp_state[4] = {
+            static_cast<uint64_t>(seed),
+            static_cast<uint64_t>(seed) ^ UINT64_C(0x1234567890ABCDEF),
+            static_cast<uint64_t>(seed) ^ UINT64_C(0xFEDCBA0987654321),
+            static_cast<uint64_t>(seed) ^ UINT64_C(0x0F1E2D3C4B5A6978)
+        };
+        memcpy(m_state, temp_state, sizeof(m_state));
     }
 
     Random::~Random() {
@@ -184,6 +112,93 @@ namespace FastMath {
     }
 
     void Random::shutdown() {
+        delete s_impl;
+        s_impl = NULL;
+    }
+
+    class VectorImpl {
+    private:
+        static constexpr float half = 0.5f;
+        static constexpr float three_halves = 1.5f;
+
+    public:
+        static float inv_sqrt(float x) {
+            #if defined(__x86_64__)
+                // Use SSE intrinsics
+                __m128 x_reg = _mm_set_ss(x);
+                __m128 y_reg = _mm_rsqrt_ss(x_reg);  // Initial approximation
+                
+                // One Newton iteration: y = y * (1.5 - 0.5 * x * y * y)
+                __m128 half_reg = _mm_set_ss(half);
+                __m128 three_halves_reg = _mm_set_ss(three_halves);
+                
+                __m128 y2 = _mm_mul_ss(y_reg, y_reg);
+                __m128 xy2 = _mm_mul_ss(x_reg, y2);
+                __m128 hxy2 = _mm_mul_ss(half_reg, xy2);
+                __m128 thm = _mm_sub_ss(three_halves_reg, hxy2);
+                y_reg = _mm_mul_ss(y_reg, thm);
+                
+                float result;
+                _mm_store_ss(&result, y_reg);
+                return result;
+            #elif defined(__ARM_NEON)
+                float result;
+                __asm__ __volatile__ (
+                    // Load value and constants
+                    "fmov s0, %w1\n\t"         // s0 = x
+                    "fmov s2, #0.5\n\t"        // s2 = 0.5
+                    "fmov s3, #1.5\n\t"        // s3 = 1.5
+                    
+                    // Initial estimate
+                    "frsqrte s1, s0\n\t"       // s1 = y0 ~= 1/sqrt(x)
+                    
+                    // First Newton iteration
+                    "fmul s4, s1, s1\n\t"      // s4 = y0 * y0
+                    "fmul s4, s0, s4\n\t"      // s4 = x * y0 * y0
+                    "fmul s4, s2, s4\n\t"      // s4 = 0.5 * x * y0 * y0
+                    "fsub s4, s3, s4\n\t"      // s4 = 1.5 - 0.5 * x * y0 * y0
+                    "fmul s1, s1, s4\n\t"      // s1 = y1 = y0 * (1.5 - 0.5 * x * y0 * y0)
+                    
+                    // Second Newton iteration
+                    "fmul s4, s1, s1\n\t"      // s4 = y1 * y1
+                    "fmul s4, s0, s4\n\t"      // s4 = x * y1 * y1
+                    "fmul s4, s2, s4\n\t"      // s4 = 0.5 * x * y1 * y1
+                    "fsub s4, s3, s4\n\t"      // s4 = 1.5 - 0.5 * x * y1 * y1
+                    "fmul s0, s1, s4\n\t"      // s0 = y2 = y1 * (1.5 - 0.5 * x * y1 * y1)
+                    
+                    // Store result
+                    "fmov %w0, s0\n\t"
+                    : "=w"(result)
+                    : "w"(x)
+                    : "s0", "s1", "s2", "s3", "s4"
+                );
+                return result;
+            #else
+                // Fallback to standard implementation
+                return 1.0f / std::sqrt(x);
+            #endif
+        }
+    };
+
+    // Static member initialization
+    VectorImpl* Vector::s_impl = NULL;
+
+    // Vector member function implementations
+    float Vector::inv_sqrt(float x) {
+        if (s_impl) {
+            return VectorImpl::inv_sqrt(x);
+        }
+        return 1.0f / std::sqrt(x);
+    }
+
+    bool Vector::initialize() {
+        if (!s_impl) {
+            s_impl = new VectorImpl();
+        }
+        return true;
+    }
+
+    void Vector::shutdown() {
         delete s_impl;
         s_impl = NULL;
     }

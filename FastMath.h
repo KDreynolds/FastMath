@@ -8,6 +8,7 @@ namespace FastMath {
     // Forward declaration of implementation class
     class MatrixImpl;
     class RandomImpl;
+    class VectorImpl;
 
     // 4x4 Matrix class
     class Matrix4x4 {
@@ -29,7 +30,6 @@ namespace FastMath {
 
         // Assembly-optimized operations
         void multiply(const Matrix4x4& other, Matrix4x4& result) const;
-        void transform(const float* vector, float* result) const;
 
         // Static initialization/cleanup
         static bool initialize();
@@ -51,6 +51,19 @@ namespace FastMath {
         float getFloat();  // Returns [0.0f, 1.0f)
         void getFloats(float* array, size_t count);
 
+        // Static initialization/cleanup
+        static bool initialize();
+        static void shutdown();
+    };
+
+    // Vector operations
+    class Vector {
+    private:
+        static VectorImpl* s_impl;
+
+    public:
+        static float inv_sqrt(float x);
+        
         // Static initialization/cleanup
         static bool initialize();
         static void shutdown();
