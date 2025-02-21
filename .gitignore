@@ -1,0 +1,25 @@
+# Build outputs
+*.o
+*.obj
+*.exe
+test_fastmath
+benchmark_fastmath
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
+*~
+
+# Build directories
+build/
+bin/
+obj/
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Crash dumps
+core
+*.core 

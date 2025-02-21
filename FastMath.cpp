@@ -16,7 +16,8 @@ namespace FastMath {
     public:
         static void generateRandomBytes(void* dest, size_t size) {
             unsigned char* output = (unsigned char*)dest;
-            for (size_t i = 0; i < size; i += 8) {
+            size_t remaining = size;
+            while (remaining > 0) {
                 uint64_t random;
                 #if defined(__x86_64__)
                 __asm__ __volatile__ (
@@ -29,7 +30,12 @@ namespace FastMath {
                 // Fallback for non-x86_64 systems
                 random = rand(); // Note: not cryptographically secure
                 #endif
-                memcpy(&output[i], &random, 8);
+                
+                // Only copy as many bytes as needed
+                size_t to_copy = (remaining < sizeof(random)) ? remaining : sizeof(random);
+                memcpy(output, &random, to_copy);
+                output += to_copy;
+                remaining -= to_copy;
             }
         }
 
@@ -73,25 +79,28 @@ namespace FastMath {
     RandomImpl* Random::s_impl = NULL;
 
     Random::Random(unsigned int seed) {
-        // Use the seed to initialize the state with explicit casts
-        uint64_t temp_state[4] = {
-            static_cast<uint64_t>(seed),
-            static_cast<uint64_t>(seed) ^ UINT64_C(0x1234567890ABCDEF),
-            static_cast<uint64_t>(seed) ^ UINT64_C(0xFEDCBA0987654321),
-            static_cast<uint64_t>(seed) ^ UINT64_C(0x0F1E2D3C4B5A6978)
-        };
-        memcpy(m_state, temp_state, sizeof(m_state));
+        if (!s_impl) {
+            initialize();  // Ensure impl is initialized
+        }
+        
+        // Initialize state with better seed mixing
+        uint64_t* state = (uint64_t*)m_state;
+        state[0] = static_cast<uint64_t>(seed) * UINT64_C(0x2545F4914F6CDD1D);
+        state[1] = (state[0] ^ UINT64_C(0x1234567890ABCDEF)) + seed;
+        state[2] = (state[1] ^ UINT64_C(0xFEDCBA0987654321)) - seed;
+        state[3] = (state[2] ^ UINT64_C(0x0F1E2D3C4B5A6978)) * seed;
     }
 
     Random::~Random() {
     }
 
     unsigned int Random::getUInt() {
-        unsigned int result;
-        if (s_impl) {
-            result = (unsigned int)RandomImpl::xoshiro256((uint64_t*)m_state);
+        if (!s_impl) {
+            return 0;
         }
-        return result;
+        
+        // Use xoshiro256 instead of generateRandomBytes for better random numbers
+        return (unsigned int)RandomImpl::xoshiro256((uint64_t*)m_state);
     }
 
     float Random::getFloat() {

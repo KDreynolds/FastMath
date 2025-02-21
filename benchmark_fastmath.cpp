@@ -5,6 +5,7 @@
 #include <vector>
 #include <algorithm>
 #include <functional>
+#include <cmath>  // Add this for std::sqrt
 
 // Helper for timing measurements
 class Timer {
